@@ -13,6 +13,8 @@ jupyter:
 ---
 
 ```{python}
+# Install dependencies
+
 # !python3 -m pip install --upgrade pip > /dev/null
 # !pip install numpy pandas seaborn > /dev/null
 import numpy as np
@@ -21,14 +23,36 @@ import pandas as pd
 from IPython.display import display
 import matplotlib.pyplot as plt
 
+import requests
+from pathlib import Path
+
 sns.set_theme(style="white")
 ```
 
-<!-- #region -->
-# Example of sampling
+```{python}
+# Download data
 
+def _download_data(url, path):
+  path = Path(path)
+  path.parent.mkdir(parents=True, exist_ok=True)
+  if not path.is_file():
+    print(f"{path} not found, downloading")
+    with open(path, "wb") as file:
+      file.write(requests.get(url, allow_redirects=True).content)
+  else:
+    print(f"{path} on instance, skipping download")
 
-## Sampling from known distributions
+navn_url = "https://raw.githubusercontent.com/martgra/fagmote_syntetiske_data/master/data/navn.txt"
+navn_path = "data/navn.txt"
+_download_data(navn_url, navn_path)
+
+cardio_train_url = "https://raw.githubusercontent.com/martgra/fagmote_syntetiske_data/master/data/cardio_train.csv"
+cardio_train_path = "data/cardio_train.csv"
+_download_data(cardio_train_url, cardio_train_path)
+
+```
+
+# Sampling from known distributions
 We assume that height, weight and income follows a normal distribution. 
 
 In the following example we assume that:
@@ -49,7 +73,6 @@ _Resources:_
 https://numpy.org/doc/stable/reference/random/generated/numpy.random.multivariate_normal.html  
 https://towardsdatascience.com/multivariate-normal-distribution-562b28ec0fe0
 
-<!-- #endregion -->
 
 ```{python}
 # Define statistical properties of population
@@ -251,10 +274,10 @@ import time
 ```{python}
 # Load "Name dataset"
 with open("data/navn.txt") as file:
-    navn = file.read()
+    original_names_dataset = file.read()
 
 # Find unique characters in text. Used to encode charactes
-vocab = sorted(set(navn))
+vocab = sorted(set(original_names_dataset))
 
 # Create functions to convert chars to ints and from ints to chars
 ids_from_chars = preprocessing.StringLookup(vocabulary=list(vocab))
@@ -262,25 +285,22 @@ chars_from_ids = preprocessing.StringLookup(vocabulary=ids_from_chars.get_vocabu
 ```
 
 ```{python}
-all_ids = ids_from_chars(tf.strings.unicode_split(navn, input_encoding='UTF-8'))
-all_ids.numpy()
-```
-
-```{python}
-all_chars = chars_from_ids(all_ids)
-all_chars.numpy()
-```
-
-```{python}
 # Create dataset from loaded text
+all_ids = ids_from_chars(tf.strings.unicode_split(original_names_dataset, input_encoding='UTF-8'))
 ids_dataset = tf.data.Dataset.from_tensor_slices(all_ids)
 
 seq_length = 10
-examples_per_epoch = len(navn)//(seq_length+1)
+examples_per_epoch = len(original_names_dataset)//(seq_length+1)
 
 # Create "sequences of text" from full text
 sequences = ids_dataset.batch(seq_length+1, drop_remainder=True)
 ```
+
+#### Creating input and target examples
+
+Observe that what we predict is the "next characters" shifted one place to the right. The neural networks job is to understand what comes "next" based on the current and previous states. 
+
+Like humans - knowing more context gives a better guess! 
 
 ```{python}
 def split_input_target(sequence):
@@ -293,18 +313,14 @@ def text_from_ids(ids):
   return tf.strings.reduce_join(chars_from_ids(ids), axis=-1)
 
 for input_example, target_example in  dataset.take(1):
-    print("Input :", text_from_ids(input_example).numpy())
-    print("Target:", text_from_ids(target_example).numpy())
+    print("Input  :{} --> {}".format(text_from_ids(input_example).numpy(), input_example.numpy()))
+    print("Target :{} -->    {}".format(text_from_ids(target_example).numpy(), target_example.numpy()))
 ```
 
 ```{python}
-# Batch size
+# Dataset properties.
 BATCH_SIZE = 64
 
-# Buffer size to shuffle the dataset
-# (TF data is designed to work with possibly infinite sequences,
-# so it doesn't attempt to shuffle the entire sequence in memory. Instead,
-# it maintains a buffer in which it shuffles elements).
 BUFFER_SIZE = 10000
 
 dataset = (
@@ -317,6 +333,8 @@ dataset
 ```
 
 ```{python}
+# Defining model
+
 class MyModel(tf.keras.Model):
   def __init__(self, vocab_size, embedding_dim, rnn_units):
     super().__init__(self)
@@ -332,6 +350,9 @@ class MyModel(tf.keras.Model):
     if states is None:
       states = self.gru.get_initial_state(x)
     x, states = self.gru(x, initial_state=states, training=training)
+    
+    # Optional: Add or remove layers if you want to play with the model architecture. 
+    
     x = self.dense(x, training=training)
 
     if return_state:
@@ -344,10 +365,10 @@ class MyModel(tf.keras.Model):
 # Length of the vocabulary in chars
 vocab_size = len(vocab)
 
-# The embedding dimension
+# The embedding dimension.
 embedding_dim = 256
 
-# Number of RNN units
+# Number of RNN units. OPTIONAL: Tune this number to play with model!
 rnn_units = 256
 
 
@@ -360,8 +381,7 @@ model = MyModel(
 
 ```{python}
 # Train the model
-
-EPOS = 30 # Change to specify how many times training should occur over. 
+EPOS = 30 # Change to specify how many times training should occur over. Longer training MAY result in better predictions.
 
 loss = tf.losses.SparseCategoricalCrossentropy(from_logits=True)
 model.compile(optimizer='adam', loss=loss)
@@ -414,20 +434,23 @@ class OneStep(tf.keras.Model):
     return predicted_chars, states
 ```
 
+### Generating names
+
+TIPS: Try tweaking **temperature** to alter generation. Highter temperature (closer to 1) gives more creative freedom while lower temperature (closer to 0) gives more conservatie generation. 
+
 ```{python}
-# Creating initial state from genders in our sample
+# Creating initial state from genders in our sample. 
 next_char=list(map(lambda x: "-" if x == "male" else "*",samples_df["Gender"].tolist()))
 
-# Creating the prediction model. 
+# Creating the prediction model. OPTIONAL: Tweek temperature to get more conservative or creative generation. 
 one_step_model = OneStep(model, chars_from_ids, ids_from_chars, next_char, temperature=0.5)
-
-# Running prediction on batch with size samples_size with length 15 char 
 
 start = time.time()
 states = None
 next_char = tf.constant(next_char)
 result = [next_char]
 
+# Running prediction on batch with size samples_size with length 15 char 
 for n in range(15):
   next_char, states = one_step_model.generate_one_step(next_char, states=states)
   result.append(next_char)
@@ -442,21 +465,41 @@ print(f"\nRun time: {end - start}")
 ```
 
 ```{python}
-names = list(result.numpy())
-names = list(map(lambda x: x.splitlines()[0].decode("utf-8").replace("*", "").replace("-", ""), names))
+generated_names = list(result.numpy())
+generated_names = list(map(lambda x: x.splitlines()[0].decode("utf-8").replace("*", "").replace("-", ""), generated_names))
+samples_df["Names"] = generated_names
 ```
 
+### Looking at generated names. 
+Observe that some but not all names are found in training data. Try tweaking temperature in the code above to get either more conservative (overlapping) generation or creative (less overlapping) generation. 
+
 ```{python}
-samples_df["Names"] = names
+names_found_in_original_data = set([population_name for population_name in samples_df["Names"].tolist() if population_name in original_names_dataset] )
+
+print(f"Unique names in generated population: {len(set(samples_df['Names'].tolist()))}")
+print(f"Unique names in training population: {len(set(original_names_dataset.splitlines()))}")
+print(f"Overlapping names between generated population and training data: {len(names_found_in_original_data)}")
+
 ```
+
+#### Looking at male names
 
 ```{python}
 samples_df[samples_df["Gender"]=="male"].head(20)
 ```
 
+#### Looking at female names
+
 ```{python}
 samples_df[samples_df["Gender"]=="female"].head(20)
 ```
+
+## Looking at our dataset
+
+We now take time to look at our dataset.
+
+#### First a correlation plot
+Does the relationships between different properties of the dataset make sense? 
 
 ```{python}
 # Compute the correlation matrix
@@ -474,12 +517,4 @@ cmap = sns.diverging_palette(230, 20, as_cmap=True)
 # Draw the heatmap with the mask and correct aspect ratio
 sns.heatmap(corr, mask=mask, cmap=cmap, vmax=1.0, center=0,
             square=True, linewidths=.5, cbar_kws={"shrink": .5})
-```
-
-```{python}
-
-```
-
-```{python}
-
 ```
