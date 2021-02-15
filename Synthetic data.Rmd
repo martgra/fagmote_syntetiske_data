@@ -352,6 +352,9 @@ class MyModel(tf.keras.Model):
     x, states = self.gru(x, initial_state=states, training=training)
     
     # Optional: Add or remove layers if you want to play with the model architecture. 
+    # For example adding a extra layer:
+    
+    # x, states = self.gru(x, initial_state=states, training=training)
     
     x = self.dense(x, training=training)
 
@@ -378,6 +381,12 @@ model = MyModel(
     embedding_dim=embedding_dim,
     rnn_units=rnn_units)
 ```
+
+#### Training the model
+
+The model is trained in the name-dataset. Try tuning either the model architecture (further up in notebook) or number of EPOS to train data.
+
+_TIPS: EPOS is one iteration of the enitire dataset_
 
 ```{python}
 # Train the model
